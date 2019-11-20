@@ -1,0 +1,127 @@
+---
+title: "P8105_hw5_yc384"
+author: 'Ying Chen (UNI: yc384)'
+date: "11/5/2019"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(rvest)
+library(readr)
+library(ggridges)
+library(purrr)
+library(httr)
+knitr::opts_chunk$set(
+	echo = TRUE,
+	warning = FALSE,
+	fig.width = 8, 
+  fig.height = 6,
+  out.width = "90%"
+)
+options(
+  ggplot2.continuous.colour = "viridis",
+  ggplot2.continuous.fill = "viridis"
+)
+scale_colour_discrete = scale_colour_viridis_d
+scale_fill_discrete = scale_fill_viridis_d
+  
+set.seed(10)
+```
+
+
+## Problem 1: Understand the effects of several variables on a child’s birthweight.
+
+#### Step 1: Load data
+
+```{r, message = FALSE}
+# read in data
+birthweight = 
+  read_csv("./data/birthweight.csv", col_names = TRUE)%>% 
+  janitor::clean_names() 
+
+head(birthweight, 3)
+tail(birthweight, 3)
+```
+
+#### Step 2: EDA
+
+```{r}
+str(birthweight)
+summary(birthweight)
+skimr::skim(birthweight)
+```
+
+From the above summary, we can see that this data contains 4342 observatons and 20 variables. There are no missing data. We then start tidying the data by converting numeirical variables to factor varaibles for babysex, father's race, mother's race and malformation history.
+
+Looking at variables: pnumlbw and pnumsga, summary shows 0 for all the statistics, which indicate these two variables maynot have valid information and we will exclude them from future analysis. 
+
+```{r}
+summary(birthweight$pnumlbw)
+summary(birthweight$pnumsga)
+```
+
+#### Step 3: Tidy data
+
+```{r}
+birthweight_tidy = 
+  birthweight %>% 
+  distinct(instacart) %>% 
+  mutate(
+    babysex = factor(babysex, levels = c(1, 2), 
+                     labels = c("male", "female")),
+    frace = factor(frace, levels = c(1, 2, 3, 4, 8, 9), 
+                   labels = c("white", "black", "asian", "puerto rican", "other", "unknown")),
+    mrace = factor(mrace, levels = c(1, 2, 3, 4, 8, 9), 
+                   labels = c("white", "black", "asian", "puerto rican", "other", "unknown")),
+    malform = factor(malform, levels = c(0, 1), 
+                     labels = c("absent", "present"))                         
+  )
+
+head(birthweight_tidy, 3)
+```
+
+#### Step 4: Fit a linear regression based on literature review for low birthweight. 
+
+My model will use birth weight (bwt) as the outcome variable and the following variables as predictors: babysex, gestational age in weeks, baby’s length at birth and average number of cigarettes smoked per day during pregnancy. 
+
+```{r}
+bwt_lm = 
+        birthweight_tidy %>% 
+        lm(bwt ~ babysex + gaweeks + blength + smoken, data = .) 
+
+summary(bwt_lm)
+```
+
+**Note:** From the model result, we can see that all the variables in my model are significant predictors of low baby birth weight. However, sex is very close to 0.05. 
+
+#### Step 5: Plot model residuals against fitted values use add_predictions and add_residuals
+
+```{r}
+bwt_1 = modelr::add_residuals(birthweight_tidy, bwt_lm)
+bwt_plot = modelr::add_predictions(bwt_1, bwt_lm)
+bwt_plot %>%
+  ggplot(aes(x = pred, y = resid)) +
+  geom_point() +
+  geom_smooth(se = F,size = 0.5) + 
+  labs(title = " Residual vs Fitted Values") +
+  theme(plot.title = element_text(hjust =.5)) +
+  geom_line(aes(y = 0), color = "red", linetype = "dashed")
+```
+
+**Note:** From the above plot, we can see that my model fits the data well. The residuals are around line 0 without any pattern. There are a few points with large residuals that need to be investigated to see if there are any data entry errors or any special cases. 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
