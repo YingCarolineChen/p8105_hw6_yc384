@@ -13,6 +13,9 @@ library(readr)
 library(ggridges)
 library(purrr)
 library(httr)
+library(mgcv)
+library(modelr)
+
 knitr::opts_chunk$set(
 	echo = TRUE,
 	warning = FALSE,
@@ -84,21 +87,21 @@ head(birthweight_tidy, 3)
 
 #### Step 4: Fit a linear regression based on literature review for low birthweight. 
 
-My model will use birth weight (bwt) as the outcome variable and the following variables as predictors: babysex, gestational age in weeks, baby’s length at birth and average number of cigarettes smoked per day during pregnancy. 
+My model will use birth weight (bwt) as the outcome variable and the following variables as main effects: babysex, gestational age in weeks, baby’s length at birth and average number of cigarettes smoked per day during pregnancy. I also included a two-way interaction term of blength*bhead. 
 
 ```{r}
 bwt_lm = 
-        birthweight_tidy %>% 
-        lm(bwt ~ babysex + gaweeks + blength + smoken, data = .) 
+    birthweight_tidy %>% 
+    lm(bwt ~ babysex + gaweeks + blength + bhead + smoken + blength*bhead, data = .) 
 
 summary(bwt_lm)
 ```
 
-**Note:** From the model result, we can see that all the variables in my model are significant predictors of low baby birth weight. However, sex is very close to 0.05. 
+**Note:** From the model result, we can see that the two-way interaction term of blength*bhead is highly significant. All other main effects (except the ones in the interaction term) are also significant predictors. 
 
 #### Step 5: Plot model residuals against fitted values use add_predictions and add_residuals
 
-```{r}
+```{r, message = FALSE}
 bwt_1 = modelr::add_residuals(birthweight_tidy, bwt_lm)
 bwt_plot = modelr::add_predictions(bwt_1, bwt_lm)
 bwt_plot %>%
@@ -110,15 +113,132 @@ bwt_plot %>%
   geom_line(aes(y = 0), color = "red", linetype = "dashed")
 ```
 
-**Note:** From the above plot, we can see that my model fits the data well. The residuals are around line 0 without any pattern. There are a few points with large residuals that need to be investigated to see if there are any data entry errors or any special cases. 
+**Note:** From the above plot, we can see that my model fits the data very well. The residuals are around line 0 without any pattern. There are a couple of points with large residuals that need to be investigated to see if there are any data entry errors or any special cases. 
+
+#### Step 6: Compare my model to two other models
+
+**Main effect model** using length at birth and gestational age as predictors
+
+```{r}
+bwt_main = 
+        birthweight_tidy %>% 
+        lm(bwt ~ gaweeks + blength, data = .) 
+
+summary(bwt_main)
+```
+
+**Three-way interaction model** using head circumference, length, sex, and all three-way interactions Make this comparison in terms of the cross-validated prediction error;
+
+```{r}
+bwt_interaction = 
+        birthweight_tidy %>% 
+        lm(bwt ~ babysex*blength*bhead, data = .) 
+
+summary(bwt_main)
+```
+
+**Make comparison** in terms of the cross-validated prediction error using crossv_mc and functions in purrr.
+
+```{r}
+cv_df = 
+  crossv_mc(birthweight_tidy, 100) 
+
+cv_df =
+  cv_df %>% 
+  mutate(
+    train = map(train, as_tibble),
+    test = map(test, as_tibble))
+```
+
+```{r}
+cv_df = 
+  cv_df %>% 
+  mutate(
+  my_mod=map(train, ~lm(bwt ~ babysex + gaweeks + blength + bhead + smoken + blength*bhead , data = .) ),
+  main_mod=map(train, ~lm(bwt ~ gaweeks + blength, data = .)),
+  interaction_mod=map(train, ~lm(bwt ~ babysex*blength*bhead, data = .)))%>% 
+  mutate(
+  rmse_my = map2_dbl(my_mod, test, ~rmse(model = .x, data = .y)),
+  rmse_main = map2_dbl(main_mod, test, ~rmse(model = .x, data = .y)),
+  rmse_interaction = map2_dbl(interaction_mod, test, ~rmse(model = .x, data = .y)))
+```
+
+```{r}
+  cv_df %>% 
+  select(starts_with("rmse")) %>% 
+  pivot_longer(everything(),
+               names_to = "model",
+               values_to = "rmse",
+               names_prefix = "rmse_"
+  ) %>% 
+  mutate(model = factor(model)) %>% 
+  ggplot(aes(x = model, y = rmse,fill = model)) +
+  geom_violin(alpha = 0.4) +
+  geom_boxplot(width = 0.1, lwd = 0.7) +
+  labs( title = "Model comparison by RMSE")
+```
+
+**Note:** From above plots, we can see that my model did the best with lowest RMSEs. The model will all three-way interaction terms had slighted higher RMSEs than my model. The model with only two main effects did the worst. 
 
 
+## Problem 2: Use the 2017 Central Park weather data. We’ll focus on a simple linear regression with tmax as the response and tmin as the predictor, and are interested in the distribution of two quantities estimated from these data: r̂2, log(β̂0∗β̂1)
 
+#### Step 1: Download data.
 
+```{r}
+weather_df = 
+  rnoaa::meteo_pull_monitors(
+    c("USW00094728"),
+    var = c("PRCP", "TMIN", "TMAX"), 
+    date_min = "2017-01-01",
+    date_max = "2017-12-31") %>%
+  mutate(
+    name = recode(id, USW00094728 = "CentralPark_NY"),
+    tmin = tmin / 10,
+    tmax = tmax / 10) %>%
+  select(name, id, everything())
 
+head(weather_df, 3)
+```
 
+#### Step 2: Bootstraping 5000 samples using broom::glance() for extracting r̂2 from a fitted regression, and broom::tidy() in computing log(β̂0∗β̂1)
 
+```{r}
+bootstrap_sample = 
+  weather_df %>% 
+  modelr::bootstrap(n = 5000) %>% 
+  mutate(
+    models = map(strap, ~ lm(tmax ~ tmin, data = .x)),
+    results = map(models, broom::tidy),
+    variables = map(models, broom::glance)
+    ) %>% 
+  select(-strap, -models) %>% 
+  unnest(results, variables)
 
+head(bootstrap_sample, 5)
+```
+
+#### Step 3: Plot the distribution of your estimates, and describe these in words. 
+
+```{r, message = FALSE}
+bootstrap_sample %>% 
+  filter(term == "tmin") %>% 
+  select(r.squared, adj.r.squared) %>%
+  ggplot() + 
+  geom_histogram(aes(x = r.squared, y =..density.., alpha = 0.5, fill = "grey")) +
+  geom_density(aes(x = r.squared,y=..density.., alpha = 0.5, color = "red")) +
+  labs(
+    title = "Distribution of Estimated RSquare",
+    x = "Estimates of RSquare",
+    y = "Density",
+    caption = "Data: 2017 Central Park weather data ") +
+  geom_vline(aes(xintercept = mean(r.squared))) +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+**Note:** From above plot, we can see that the distribution of R square is close to a normal distribution.  
+
+#### Step 4: Using the 5000 bootstrap estimates, identify the 2.5% and 97.5% quantiles to provide a 95% confidence interval for r̂2 and log(β̂0∗β̂1)
 
 
 
